@@ -10,6 +10,12 @@ const nextConfig: NextConfig = {
       {
         hostname: 'avatar.vercel.sh',
       },
+      {
+        hostname: 'nazc9sosqxxi4idj.public.blob.vercel-storage.com',
+      },
+      {
+        hostname: 'fal.media',
+      }
     ],
   },
 };

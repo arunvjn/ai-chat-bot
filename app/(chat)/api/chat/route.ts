@@ -1,15 +1,19 @@
+import { fal } from "@fal-ai/client";
+import { HfInference }  from "@huggingface/inference"
+import { put } from "@vercel/blob";
 import {
   convertToCoreMessages,
   Message,
   StreamData,
   streamObject,
   streamText,
+  tool,
 } from 'ai';
 import { z } from 'zod';
 
 import { customModel } from '@/ai';
 import { models } from '@/ai/models';
-import { blocksPrompt, regularPrompt, systemPrompt } from '@/ai/prompts';
+import { systemPrompt } from '@/ai/prompts';
 import { auth } from '@/app/(auth)/auth';
 import {
   deleteChatById,
@@ -24,8 +28,13 @@ import { Suggestion } from '@/db/schema';
 import {
   generateUUID,
   getMostRecentUserMessage,
+  promiseWithTimeout,
   sanitizeResponseMessages,
+  sleep,
 } from '@/lib/utils';
+
+
+
 
 import { generateTitleFromUserMessage } from '../../actions';
 
@@ -90,241 +99,37 @@ export async function POST(request: Request) {
   const streamingData = new StreamData();
 
   const result = await streamText({
-    model: customModel(model.apiIdentifier),
-    system: systemPrompt,
+    model: customModel('gpt-4o'),
+    system: `${systemPrompt}`,
     messages: coreMessages,
-    maxSteps: 5,
-    experimental_activeTools: allTools,
+    maxSteps: 1,
+    experimental_activeTools: ['generateImage'],
     tools: {
-      getWeather: {
-        description: 'Get the current weather at a location',
+      // generateImage: tool({
+      //   description: 'Generate a 300 x 300 image',
+      //   parameters: z.object({
+      //     prompt: z.string().describe("description of the image user wants to generate"),
+      //   }),
+      //   execute: async ({ prompt }) => {
+      //     return generateAndUploadImages(prompt, streamingData);
+      //   }
+      // }),
+      generateImage: tool({
+        description: 'Generate a 300 x 300 image',
         parameters: z.object({
-          latitude: z.number(),
-          longitude: z.number(),
+          prompt: z.string().describe("description of the image user wants to generate"),
         }),
-        execute: async ({ latitude, longitude }) => {
-          const response = await fetch(
-            `https://api.open-meteo.com/v1/forecast?latitude=${latitude}&longitude=${longitude}&current=temperature_2m&hourly=temperature_2m&daily=sunrise,sunset&timezone=auto`
-          );
-
-          const weatherData = await response.json();
-          return weatherData;
-        },
-      },
-      createDocument: {
-        description: 'Create a document for a writing activity',
-        parameters: z.object({
-          title: z.string(),
-        }),
-        execute: async ({ title }) => {
-          const id = generateUUID();
-          let draftText: string = '';
-
-          streamingData.append({
-            type: 'id',
-            content: id,
-          });
-
-          streamingData.append({
-            type: 'title',
-            content: title,
-          });
-
-          streamingData.append({
-            type: 'clear',
-            content: '',
-          });
-
-          const { fullStream } = await streamText({
-            model: customModel(model.apiIdentifier),
-            system:
-              'Write about the given topic. Markdown is supported. Use headings wherever appropriate.',
-            prompt: title,
-          });
-
-          for await (const delta of fullStream) {
-            const { type } = delta;
-
-            if (type === 'text-delta') {
-              const { textDelta } = delta;
-
-              draftText += textDelta;
-              streamingData.append({
-                type: 'text-delta',
-                content: textDelta,
-              });
-            }
-          }
-
-          streamingData.append({ type: 'finish', content: '' });
-
-          if (session.user && session.user.id) {
-            await saveDocument({
-              id,
-              title,
-              content: draftText,
-              userId: session.user.id,
-            });
-          }
-
-          return {
-            id,
-            title,
-            content: `A document was created and is now visible to the user.`,
-          };
-        },
-      },
-      updateDocument: {
-        description: 'Update a document with the given description',
-        parameters: z.object({
-          id: z.string().describe('The ID of the document to update'),
-          description: z
-            .string()
-            .describe('The description of changes that need to be made'),
-        }),
-        execute: async ({ id, description }) => {
-          const document = await getDocumentById({ id });
-
-          if (!document) {
-            return {
-              error: 'Document not found',
-            };
-          }
-
-          const { content: currentContent } = document;
-          let draftText: string = '';
-
-          streamingData.append({
-            type: 'clear',
-            content: document.title,
-          });
-
-          const { fullStream } = await streamText({
-            model: customModel(model.apiIdentifier),
-            system:
-              'You are a helpful writing assistant. Based on the description, please update the piece of writing.',
-            experimental_providerMetadata: {
-              openai: {
-                prediction: {
-                  type: 'content',
-                  content: currentContent,
-                },
-              },
-            },
-            messages: [
-              {
-                role: 'user',
-                content: description,
-              },
-              { role: 'user', content: currentContent },
-            ],
-          });
-
-          for await (const delta of fullStream) {
-            const { type } = delta;
-
-            if (type === 'text-delta') {
-              const { textDelta } = delta;
-
-              draftText += textDelta;
-              streamingData.append({
-                type: 'text-delta',
-                content: textDelta,
-              });
-            }
-          }
-
-          streamingData.append({ type: 'finish', content: '' });
-
-          if (session.user && session.user.id) {
-            await saveDocument({
-              id,
-              title: document.title,
-              content: draftText,
-              userId: session.user.id,
-            });
-          }
-
-          return {
-            id,
-            title: document.title,
-            content: 'The document has been updated successfully.',
-          };
-        },
-      },
-      requestSuggestions: {
-        description: 'Request suggestions for a document',
-        parameters: z.object({
-          documentId: z
-            .string()
-            .describe('The ID of the document to request edits'),
-        }),
-        execute: async ({ documentId }) => {
-          const document = await getDocumentById({ id: documentId });
-
-          if (!document || !document.content) {
-            return {
-              error: 'Document not found',
-            };
-          }
-
-          let suggestions: Array<
-            Omit<Suggestion, 'userId' | 'createdAt' | 'documentCreatedAt'>
-          > = [];
-
-          const { elementStream } = await streamObject({
-            model: customModel(model.apiIdentifier),
-            system:
-              'You are a help writing assistant. Given a piece of writing, please offer suggestions to improve the piece of writing and describe the change. It is very important for the edits to contain full sentences instead of just words. Max 5 suggestions.',
-            prompt: document.content,
-            output: 'array',
-            schema: z.object({
-              originalSentence: z.string().describe('The original sentence'),
-              suggestedSentence: z.string().describe('The suggested sentence'),
-              description: z
-                .string()
-                .describe('The description of the suggestion'),
-            }),
-          });
-
-          for await (const element of elementStream) {
-            const suggestion = {
-              originalText: element.originalSentence,
-              suggestedText: element.suggestedSentence,
-              description: element.description,
-              id: generateUUID(),
-              documentId: documentId,
-              isResolved: false,
-            };
-
-            streamingData.append({
-              type: 'suggestion',
-              content: suggestion,
-            });
-
-            suggestions.push(suggestion);
-          }
-
-          if (session.user && session.user.id) {
-            const userId = session.user.id;
-
-            await saveSuggestions({
-              suggestions: suggestions.map((suggestion) => ({
-                ...suggestion,
-                userId,
-                createdAt: new Date(),
-                documentCreatedAt: document.createdAt,
-              })),
-            });
-          }
-
-          return {
-            id: documentId,
-            title: document.title,
-            message: 'Suggestions have been added to the document',
-          };
-        },
-      },
+        execute: async ({ prompt }) => {
+          streamingData.append({ type: 'loading', content: '' });
+          const result1 = (await generateImageURLs(prompt));
+          streamingData.append({ type: 'image', content: result1.data.images[0]?.url });
+          await sleep(2000);
+          const result2 = (await generateImageURLs(prompt, "fal-ai/flux/schnell"));
+          streamingData.append({ type: 'image', content: result2.data.images[0]?.url });
+          await sleep(2000);
+          return [result1.data.images[0]?.url, result2.data.images[0]?.url];
+        }
+      })
     },
     onFinish: async ({ responseMessages }) => {
       if (session.user && session.user.id) {
@@ -332,6 +137,10 @@ export async function POST(request: Request) {
           const responseMessagesWithoutIncompleteToolCalls =
             sanitizeResponseMessages(responseMessages);
 
+          
+          if(responseMessagesWithoutIncompleteToolCalls.length === 0) {
+            return;
+          }
           await saveMessages({
             messages: responseMessagesWithoutIncompleteToolCalls.map(
               (message) => {
@@ -353,11 +162,14 @@ export async function POST(request: Request) {
               }
             ),
           });
+
+          streamingData.append({ type: 'done', content: '' });
         } catch (error) {
           console.error('Failed to save chat');
         }
       }
 
+      streamingData.append({ type: 'done', content: '' });
       streamingData.close();
     },
     experimental_telemetry: {
@@ -400,4 +212,67 @@ export async function DELETE(request: Request) {
       status: 500,
     });
   }
+}
+
+const hf = new HfInference(
+  process.env.HF_API_KEY,
+);
+
+async function convertBlobToBase64(blob: Blob): Promise<string> {
+  const data = await blob.arrayBuffer();
+  const buffer = Buffer.from(data);
+  return "data:" + blob.type + ';base64,' + buffer.toString('base64');
+}
+
+
+async function generateAndUploadImages(prompt: string, streamingData: StreamData) {
+  streamingData.append({ type: 'loading', content: '' });
+  const [st1, st2] = await Promise.allSettled([
+    hf.textToImage({ model: 'stabilityai/stable-diffusion-2', inputs: `${prompt}. Create one image only.` })
+      .then(convertBlobToBase64)
+      .then((data) => {
+        streamingData.append({ type: 'image', content: data });
+        return data;
+      }),
+    hf.textToImage({ model: 'prompthero/openjourney-v4', inputs: `${prompt}. Create one image only.` })
+      .then(convertBlobToBase64)
+      .then((data) => {
+        streamingData.append({ type: 'image', content: data });
+        return data;
+      })
+  ]);
+
+  // Filter successful results
+  const successfulImages = [st1, st2]
+    .filter(result => result.status === 'fulfilled')
+    .map(result => result.value);
+
+  // Upload images
+  const uploadResults = await Promise.allSettled(
+    successfulImages.map(image =>
+      put(`images/${generateUUID()}.jpg`, image, { access: 'public' })
+        .then(result => result.downloadUrl)
+    )
+  );
+
+  // Filter successful uploads
+  return uploadResults
+    .filter(result => result.status === 'fulfilled')
+    .map(result => result.value);
+}
+
+
+async function generateImageURLs(prompt: string, model="fal-ai/fast-sdxl") {
+  const result = await fal.subscribe(model, {
+    input: {
+      prompt
+    },
+    logs: true,
+    onQueueUpdate: (update) => {
+      if (update.status === "IN_PROGRESS") {
+        update.logs.map((log) => log.message).forEach(console.log);
+      }
+    },
+  });
+  return result;
 }

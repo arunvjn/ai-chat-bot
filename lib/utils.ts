@@ -8,6 +8,8 @@ import {
 import { clsx, type ClassValue } from 'clsx';
 import { twMerge } from 'tailwind-merge';
 
+import { fal } from "@fal-ai/client";
+
 import { Message as DBMessage, Document } from '@/db/schema';
 
 export function cn(...inputs: ClassValue[]) {
@@ -221,4 +223,50 @@ export function getMessageIdFromAnnotations(message: Message) {
 
   // @ts-expect-error messageIdFromServer is not defined in MessageAnnotation
   return annotation.messageIdFromServer;
+}
+
+
+export async function sleep(ms: number) {
+	return new Promise<void>((resolve) => setTimeout(resolve, ms));
+}
+
+
+export async function minDelay<T>(promise: Promise<T>, ms: number) {
+	const [p] = await Promise.all([promise, sleep(ms)]);
+
+	return p;
+}
+
+
+export function promiseWithTimeout<T>(promise: Promise<T>, timeout: number, errorMessage = 'Operation timed out') {
+  return new Promise<T>((resolve, reject) => {
+      const timer = setTimeout(() => {
+          reject(new Error(errorMessage));
+      }, timeout);
+
+      promise
+          .then((result) => {
+              clearTimeout(timer);
+              resolve(result);
+          })
+          .catch((err) => {
+              clearTimeout(timer);
+              reject(err);
+          });
+  });
+}
+
+export async function generateImageURL(prompt: string, model: string) {
+  const result = await fal.subscribe("fal-ai/fast-sdxl", {
+    input: {
+      prompt
+    },
+    logs: true,
+    onQueueUpdate: (update) => {
+      if (update.status === "IN_PROGRESS") {
+        update.logs.map((log) => log.message).forEach(console.log);
+      }
+    },
+  });
+  return result;
 }

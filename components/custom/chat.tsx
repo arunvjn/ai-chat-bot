@@ -1,9 +1,10 @@
 'use client';
 
-import { Attachment, Message } from 'ai';
+import { Attachment, JSONValue, Message } from 'ai';
 import { useChat } from 'ai/react';
 import { AnimatePresence } from 'framer-motion';
-import { useState } from 'react';
+import Image from 'next/image';
+import { Dispatch, SetStateAction, useMemo, useState } from 'react';
 import useSWR, { useSWRConfig } from 'swr';
 import { useWindowSize } from 'usehooks-ts';
 
@@ -14,9 +15,16 @@ import { Vote } from '@/db/schema';
 import { fetcher } from '@/lib/utils';
 
 import { Block, UIBlock } from './block';
-import { BlockStreamHandler } from './block-stream-handler';
 import { MultimodalInput } from './multimodal-input';
 import { Overview } from './overview';
+import { ImageLoader } from './image-loader';
+import { ImageStreamHandler } from './image-stream-handler';
+export type ImageStream = {
+  status: 'idle' | 'streaming';
+  content: {
+    images: string[];
+  };
+}
 
 export function Chat({
   id,
@@ -74,6 +82,15 @@ export function Chat({
 
   const [attachments, setAttachments] = useState<Array<Attachment>>([]);
 
+  const [images, setImages] = useState<ImageStream>({
+    status: 'idle',
+    content: {
+      images: [],
+    }
+  });
+
+  console.log({ messages });
+
   return (
     <>
       <div className="flex flex-col min-w-0 h-dvh bg-background">
@@ -91,6 +108,8 @@ export function Chat({
               message={message}
               block={block}
               setBlock={setBlock}
+              images={images}
+              setImages={setImages}
               isLoading={isLoading && messages.length - 1 === index}
               vote={
                 votes
@@ -127,29 +146,7 @@ export function Chat({
           />
         </form>
       </div>
-
-      <AnimatePresence>
-        {block && block.isVisible && (
-          <Block
-            chatId={id}
-            input={input}
-            setInput={setInput}
-            handleSubmit={handleSubmit}
-            isLoading={isLoading}
-            stop={stop}
-            attachments={attachments}
-            setAttachments={setAttachments}
-            append={append}
-            block={block}
-            setBlock={setBlock}
-            messages={messages}
-            setMessages={setMessages}
-            votes={votes}
-          />
-        )}
-      </AnimatePresence>
-
-      <BlockStreamHandler streamingData={streamingData} setBlock={setBlock} />
+      <ImageStreamHandler streamingData={streamingData} setImages={setImages} />
     </>
   );
 }

@@ -1,6 +1,6 @@
 'use client';
 
-import { Message } from 'ai';
+import { Message, tool } from 'ai';
 import cx from 'classnames';
 import { motion } from 'framer-motion';
 import { Dispatch, SetStateAction } from 'react';
@@ -14,6 +14,10 @@ import { Markdown } from './markdown';
 import { MessageActions } from './message-actions';
 import { PreviewAttachment } from './preview-attachment';
 import { Weather } from './weather';
+import Image from 'next/image';
+import { ImageContainer } from './image-container';
+import GlowingTextLoader from './glowing-text';
+import { ImageLoader } from './image-loader';
 
 export const PreviewMessage = ({
   chatId,
@@ -22,6 +26,8 @@ export const PreviewMessage = ({
   setBlock,
   vote,
   isLoading,
+  images,
+  setImages
 }: {
   chatId: string;
   message: Message;
@@ -29,6 +35,8 @@ export const PreviewMessage = ({
   setBlock: Dispatch<SetStateAction<UIBlock>>;
   vote: Vote | undefined;
   isLoading: boolean;
+  images: any;
+  setImages: Dispatch<SetStateAction<any>>;
 }) => {
   return (
     <motion.div
@@ -88,6 +96,8 @@ export const PreviewMessage = ({
                           block={block}
                           setBlock={setBlock}
                         />
+                      ) : toolName === 'generateImage' ? (
+                        <ImageContainer result={result} />
                       ) : (
                         <pre>{JSON.stringify(result, null, 2)}</pre>
                       )}
@@ -112,6 +122,8 @@ export const PreviewMessage = ({
                           type="request-suggestions"
                           args={args}
                         />
+                      ) : (toolName === 'generateImage') ? (
+                        <ImageLoader images={images} setImages={setImages} />
                       ) : null}
                     </div>
                   );

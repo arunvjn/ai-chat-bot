@@ -3,6 +3,7 @@ import { NextResponse } from "next/server";
 import { z } from "zod";
 
 import { auth } from "@/app/(auth)/auth";
+import { File } from "node:buffer";
 
 const FileSchema = z.object({
   file: z
@@ -12,7 +13,7 @@ const FileSchema = z.object({
     })
     .refine(
       (file) =>
-        ["image/jpeg", "image/png", "application/pdf"].includes(file.type),
+        ["image/jpeg", "image/png", "application/pdf", "image/webp"].includes(file.type),
       {
         message: "File type should be JPEG, PNG, or PDF",
       },
